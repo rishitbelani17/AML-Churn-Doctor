@@ -12,9 +12,14 @@ from features import build_features_all_businesses
 def train_churn_model():
     Xy, _ = build_features_all_businesses()
     y = Xy["is_churned"].astype(int)
-    # simple feature selection
-    drop_cols = ["customer_id", "is_churned"]
+    # simple feature selection - drop non-numeric columns
+    drop_cols = ["customer_id", "business_id", "is_churned"]
     X = Xy.drop(columns=drop_cols)
+    
+    # Ensure all columns are numeric (convert any remaining object types)
+    for col in X.columns:
+        if X[col].dtype == 'object':
+            X = X.drop(columns=[col])
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
