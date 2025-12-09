@@ -1,10 +1,10 @@
 # scheduler_job.py
 from features import build_features_for_business
-from shap_explainer import score_with_shap
+from explainer import score_with_shap
 from insight_engine import generate_insights_for_business
 from emailer import send_email
 from features import load_raw
-from llm_client import generate_email
+from llm import generate_email
 
 def churn_analysis_job(business_id: str, owner_email: str, owner_name: str = "Owner"):
     businesses, *_ = load_raw()
@@ -17,7 +17,7 @@ def churn_analysis_job(business_id: str, owner_email: str, owner_name: str = "Ow
     # generate insights via LLM
     bundle, insights = generate_insights_for_business(business_id, ref_date)
 
-    period_str = f"{bundle['period']['start']} to {bundle['period']['end']}"
+    period_str = f"{bundle['period']['start'][:10]} to {bundle['period']['end'][:10]}"
     email_body = generate_email(
         owner_name=owner_name,
         business_name=b_row['name'],
@@ -26,7 +26,13 @@ def churn_analysis_job(business_id: str, owner_email: str, owner_name: str = "Ow
     )
 
     subject = f"[Churn Doctor] Weekly churn summary for {b_row['name']}"
-    send_email(owner_email, subject, email_body)
+    success, message = send_email(owner_email, subject, email_body)
+    
+    if success:
+        print(f"✅ {message}")
+    else:
+        print(f"❌ {message}")
+        raise RuntimeError(f"Failed to send email: {message}")
 
 if __name__ == "__main__":
     # Example manual trigger (replace with real email)

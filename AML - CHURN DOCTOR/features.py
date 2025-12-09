@@ -40,7 +40,7 @@ def build_features_for_business(business_id: str, ref_date: datetime = None) -> 
     orders_90d = ords[ords["order_ts"] >= ref_date - timedelta(days=90)] \
         .groupby("customer_id")["order_id"].nunique().rename("orders_90d")
 
-    avg_discount_pct = (ords.groupby("customer_id")
+    avg_discount_pct = (ords.groupby("customer_id")[["discount_amount", "revenue"]]
                         .apply(lambda g: (g["discount_amount"].sum() / g["revenue"].sum()) * 100
                                if g["revenue"].sum() > 0 else 0.0)
                         .rename("avg_discount_pct"))

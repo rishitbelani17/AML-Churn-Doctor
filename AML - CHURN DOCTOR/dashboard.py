@@ -4,8 +4,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from features import load_raw, build_features_for_business
-from shap_explainer import score_with_shap
-from insight_engine import build_evidence_bundle_for_business
+from explainer import score_with_shap
+from insight_engine import build_evidence_bundle_for_business, generate_insights_for_business
+from emailer import send_email, is_email_configured
+from llm import generate_email
 
 st.set_page_config(page_title="Churn Doctor", layout="wide")
 
@@ -13,7 +15,7 @@ st.set_page_config(page_title="Churn Doctor", layout="wide")
 def load_all():
     return load_raw()
 
-businesses, customers, orders, interactions = load_all()
+businesses, customers, orders, interactions = load_raw()
 orders["order_ts"] = pd.to_datetime(orders["order_ts"])
 
 st.sidebar.title("Churn Doctor")
@@ -97,8 +99,147 @@ st.bar_chart(imp_df.set_index("feature"))
 
 st.markdown("---")
 
-st.subheader("LLM-generated overview")
+st.subheader("LLM-generated Insights")
 
-bundle = build_evidence_bundle_for_business(business_id, ref_date, lookback_days)
-st.json(bundle, expanded=False)
-st.write("You can call `generate_insights_for_business` and render the LLM's narrative here if desired.")
+# Generate insights
+with st.spinner("Generating insights..."):
+    bundle, insights = generate_insights_for_business(business_id, ref_date, lookback_days)
+
+# Display insights
+st.markdown(f"### {insights.get('headline', 'Churn Analysis Summary')}")
+
+if insights.get('top_reasons'):
+    st.markdown("#### Top Churn Drivers")
+    for i, reason in enumerate(insights.get('top_reasons', [])[:5], 1):
+        with st.expander(f"{i}. {reason['name']} (Impact: {reason['impact_estimate']})"):
+            for evidence in reason.get('evidence', []):
+                st.write(f"• {evidence}")
+
+if insights.get('recommendations'):
+    st.markdown("#### Recommendations")
+    for i, rec in enumerate(insights.get('recommendations', [])[:5], 1):
+        st.write(f"{i}. {rec}")
+
+st.markdown("---")
+
+# Email sending section
+st.subheader("📧 Send Report via Email")
+
+# Add refresh button to reload email config
+if st.button("🔄 Refresh Email Status", help="Click if you just updated email settings"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Check if email is configured
+try:
+    email_configured = is_email_configured()
+except Exception as e:
+    st.error(f"Error checking email config: {e}")
+    email_configured = False
+
+if not email_configured:
+    st.warning("⚠️ Email not configured. To enable email sending:")
+    with st.expander("📝 How to configure email"):
+        st.markdown("""
+        **Option 1: Edit emailer.py**
+        - Open `emailer.py`
+        - Replace `SMTP_USER` with your Gmail address
+        - Replace `SMTP_PASS` with your Gmail App Password
+        
+        **Option 2: Use environment variables**
+        ```bash
+        export SMTP_USER="your-email@gmail.com"
+        export SMTP_PASS="your-app-password"
+        ```
+        
+        **How to get Gmail App Password:**
+        1. Go to your Google Account settings
+        2. Enable 2-Step Verification
+        3. Go to "App passwords"
+        4. Generate a new app password for "Mail"
+        5. Use that password in the configuration
+        """)
+else:
+    st.success("✓ Email is configured")
+
+# Email form
+with st.form("email_form", clear_on_submit=False):
+    recipient_email = st.text_input(
+        "Recipient Email",
+        value=st.session_state.get("recipient_email", ""),
+        placeholder="recipient@example.com",
+        key="email_input"
+    )
+    
+    owner_name = st.text_input(
+        "Recipient Name",
+        value=st.session_state.get("owner_name", "Business Owner"),
+        key="name_input"
+    )
+    
+    # Enable button if email is configured and recipient email is provided
+    has_recipient = bool(recipient_email and recipient_email.strip())
+    can_send = email_configured and has_recipient
+    
+    # Button should be enabled if we can send AND have a recipient
+    button_disabled = not can_send
+    
+    # Store values in session state
+    st.session_state["recipient_email"] = recipient_email
+    st.session_state["owner_name"] = owner_name
+    
+    # Show status
+    if not email_configured:
+        st.info("ℹ️ Configure email settings to enable sending")
+    elif not has_recipient:
+        st.info("ℹ️ Enter recipient email address")
+    else:
+        st.success("✓ Ready to send")
+    
+    send_button = st.form_submit_button(
+        "📤 Send Email Report",
+        # disabled=button_disabled,
+        use_container_width=True,
+        type="primary" if not button_disabled else "secondary"
+    )
+    
+    if send_button and recipient_email:
+        if not email_configured:
+            st.error("Please configure email settings first. Edit emailer.py to set SMTP_USER and SMTP_PASS.")
+        else:
+            try:
+                # Get business name
+                business_name = businesses[businesses["business_id"] == business_id].iloc[0]["name"]
+                period_str = f"{bundle['period']['start'][:10]} to {bundle['period']['end'][:10]}"
+                
+                # Generate email body
+                email_body = generate_email(
+                    owner_name=owner_name,
+                    business_name=business_name,
+                    period_str=period_str,
+                    insights=insights
+                )
+                
+                subject = f"[Churn Doctor] Churn Analysis Report for {business_name}"
+                
+                # Send email
+                with st.spinner("Sending email..."):
+                    success, message = send_email(
+                        to_email=recipient_email,
+                        subject=subject,
+                        body=email_body
+                    )
+                
+                if success:
+                    st.success(f"✅ {message}")
+                    st.balloons()
+                else:
+                    st.error(f"❌ {message}")
+            
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+# Show raw bundle data (collapsible)
+with st.expander("📊 Raw Evidence Bundle Data"):
+    st.json(bundle)
+

@@ -1,0 +1,29 @@
+# Core Data Science Libraries
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<3.0.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+shap>=0.42.0
+joblib>=1.3.0
+
+# Dashboard
+streamlit>=1.28.0
+
+# Free LLM (Hugging Face Transformers - replaces OpenAI)
+# No API keys needed - all models run locally for free
+transformers>=4.35.0
+torch>=2.1.0
+sentencepiece>=0.1.99
+
+# Additional dependencies (automatically installed with above packages)
+# scipy - required by xgboost and shap
+# tqdm - required by shap
+# packaging - required by shap
+# numba - required by shap
+# cloudpickle - required by shap
+
+# Optional: For better performance (CPU-optimized PyTorch)
+# Uncomment the line below if you want CPU-only version (smaller download, ~500MB vs ~2GB)
+# torch>=2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
