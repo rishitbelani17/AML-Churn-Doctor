@@ -8,8 +8,8 @@ from typing import Optional, Tuple
 # Email configuration - can be set via environment variables or directly
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "selfmail@gmail.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "selfpassword")
+SMTP_USER = os.getenv("app email", "app email")
+SMTP_PASS = os.getenv("app password", "app password")
 
 def send_email(
     to_email: str, 

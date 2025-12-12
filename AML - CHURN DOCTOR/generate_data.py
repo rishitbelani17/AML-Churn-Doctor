@@ -26,6 +26,15 @@ def generate_synthetic_data(
     product_categories = ["Electronics", "Clothing", "Home", "Beauty", "Fitness", "Grocery"]
     acq_channels = ["ads", "organic", "referral", "offline"]
     cities = ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Toronto", "London"]
+    
+    # Realistic business names by industry
+    business_names_by_industry = {
+        "ecommerce": ["TechMart", "ShopHub", "QuickCart", "Digital Depot", "MarketPlace Pro", "Online Express", "WebStore Central"],
+        "retail": ["Urban Retail Co", "City Market", "Main Street Store", "Retail Express", "The Storefront", "Downtown Retail", "Corner Shop"],
+        "subscription": ["SubscribeBox", "Monthly Delights", "The Subscription Co", "Recurring Rewards", "Boxed Bliss", "AutoShip Plus", "Monthly Magic"],
+        "beauty": ["Glamour Beauty", "Pure Cosmetics", "Beauty Essentials", "Glow & Co", "The Beauty Bar", "Radiant Skincare", "Luxe Cosmetics"],
+        "fitness": ["FitLife Gym", "ActiveZone", "PowerFit", "The Fitness Hub", "Strength & Co", "Elite Fitness", "Peak Performance"]
+    }
 
     customer_id_counter = 1
     order_id_counter = 1
@@ -36,10 +45,16 @@ def generate_synthetic_data(
         base_daily_orders = random.randint(20, 120)
         avg_ticket = random.uniform(20, 120)
         discount_policy = random.choice(["low", "medium", "high"])
+        
+        # Get industry for this business
+        industry = industries[idx % len(industries)]
+        # Select a random name from the appropriate industry list
+        available_names = business_names_by_industry[industry]
+        business_name = random.choice(available_names)
 
         business_rows.append({
             "business_id": b_id,
-            "name": f"Business_{idx+1}",
+            "name": business_name,
             "industry": industries[idx % len(industries)],
             "country": countries[idx % len(countries)],
             "currency": currencies[idx % len(currencies)],
@@ -51,6 +66,9 @@ def generate_synthetic_data(
         })
 
         customers_for_business = []
+        # Track customer behavior profiles for more diverse churn scores
+        customer_profiles = {}  # customer_id -> profile dict
+        
         n_initial_customers = random.randint(150, 400)
         for _ in range(n_initial_customers):
             signup_offset = random.randint(0, 60)
@@ -58,6 +76,14 @@ def generate_synthetic_data(
             c_id = f"c_{customer_id_counter}"
             customer_id_counter += 1
             customers_for_business.append(c_id)
+            
+            # Assign behavior profile to create diverse churn patterns
+            # Profile determines order frequency, recency, and engagement
+            profile_type = random.choices(
+                ["highly_active", "active", "moderate", "low_activity", "inactive"],
+                weights=[0.15, 0.25, 0.30, 0.20, 0.10]  # More moderate customers for uniform distribution
+            )[0]
+            
             customer_rows.append({
                 "customer_id": c_id,
                 "business_id": b_id,
@@ -66,6 +92,20 @@ def generate_synthetic_data(
                 "city": random.choice(cities),
                 "acquisition_channel": random.choice(acq_channels)
             })
+            
+            # Store profile for this customer
+            customer_profiles[c_id] = {
+                "type": profile_type,
+                "order_probability": {
+                    "highly_active": 0.8,
+                    "active": 0.6,
+                    "moderate": 0.4,
+                    "low_activity": 0.2,
+                    "inactive": 0.05
+                }[profile_type],
+                "last_order_day": None,
+                "order_count": 0
+            }
 
         issue_profile = {
             "SHIPPING_DELAY": random.uniform(0.15, 0.35),
@@ -108,6 +148,13 @@ def generate_synthetic_data(
                 c_id = f"c_{customer_id_counter}"
                 customer_id_counter += 1
                 customers_for_business.append(c_id)
+                
+                # Assign behavior profile for new customers
+                profile_type = random.choices(
+                    ["highly_active", "active", "moderate", "low_activity", "inactive"],
+                    weights=[0.15, 0.25, 0.30, 0.20, 0.10]
+                )[0]
+                
                 customer_rows.append({
                     "customer_id": c_id,
                     "business_id": b_id,
@@ -116,12 +163,62 @@ def generate_synthetic_data(
                     "city": random.choice(cities),
                     "acquisition_channel": random.choice(acq_channels)
                 })
+                
+                # Store profile for new customer
+                customer_profiles[c_id] = {
+                    "type": profile_type,
+                    "order_probability": {
+                        "highly_active": 0.8,
+                        "active": 0.6,
+                        "moderate": 0.4,
+                        "low_activity": 0.2,
+                        "inactive": 0.05
+                    }[profile_type],
+                    "last_order_day": None,
+                    "order_count": 0
+                }
 
             if not customers_for_business:
                 continue
 
             for _ in range(num_orders_today):
-                customer_id = random.choice(customers_for_business)
+                # Select customer based on their activity profile for more diverse patterns
+                # Weight selection by activity level
+                customer_weights = []
+                for cid in customers_for_business:
+                    if cid in customer_profiles:
+                        # Active customers more likely to order, but not exclusively
+                        weight = customer_profiles[cid]["order_probability"]
+                        # Add some randomness to prevent pure deterministic behavior
+                        weight += random.uniform(-0.1, 0.1)
+                        customer_weights.append(max(0.01, weight))
+                    else:
+                        customer_weights.append(0.5)  # Default weight for customers without profile
+                
+                # Normalize weights
+                total_weight = sum(customer_weights)
+                if total_weight > 0:
+                    customer_weights = [w / total_weight for w in customer_weights]
+                    customer_id = np.random.choice(customers_for_business, p=customer_weights)
+                else:
+                    customer_id = random.choice(customers_for_business)
+                
+                # Check if this customer should order based on their profile
+                if customer_id in customer_profiles:
+                    profile = customer_profiles[customer_id]
+                    # Some customers have periods of inactivity
+                    if profile["type"] == "inactive" and random.random() > profile["order_probability"]:
+                        continue  # Skip this order for inactive customers
+                    
+                    # Moderate and low activity customers order less frequently
+                    if profile["type"] in ["moderate", "low_activity"]:
+                        days_since_last = day - profile["last_order_day"] if profile["last_order_day"] is not None else 999
+                        min_days_between_orders = {
+                            "moderate": 7,
+                            "low_activity": 21
+                        }.get(profile["type"], 0)
+                        if days_since_last < min_days_between_orders:
+                            continue  # Skip if too soon since last order
                 order_time = date + timedelta(
                     hours=random.randint(9, 21),
                     minutes=random.randint(0, 59)
@@ -167,6 +264,11 @@ def generate_synthetic_data(
                     "channel": random.choice(["web", "app", "offline"]),
                     "delivery_delay_days": int(delivery_delay_days)
                 })
+                
+                # Update customer profile
+                if customer_id in customer_profiles:
+                    customer_profiles[customer_id]["last_order_day"] = day
+                    customer_profiles[customer_id]["order_count"] += 1
 
                 complaint_prob = 0.03
                 if delivery_delay_days > 3:
