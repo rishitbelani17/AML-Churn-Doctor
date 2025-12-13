@@ -2,12 +2,14 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import altair as alt
 
 from features import load_raw, build_features_for_business
 from explainer import score_with_shap
 from insight_engine import build_evidence_bundle_for_business, generate_insights_for_business
 from emailer import send_email, is_email_configured
 from llm import generate_email
+from chatbot import answer_question
 
 st.set_page_config(page_title="Churn Doctor", layout="wide")
 
@@ -58,13 +60,27 @@ st.markdown("---")
 
 # Charts
 st.subheader("Churn score distribution")
-st.bar_chart(scored["churn_score"])
+# Create histogram of churn scores
+churn_score_df = pd.DataFrame({
+    "Churn Score": scored["churn_score"],
+    "Count": 1
+})
+churn_hist = alt.Chart(churn_score_df).mark_bar().encode(
+    x=alt.X("Churn Score:Q", bin=alt.Bin(maxbins=20), title="Churn Score"),
+    y=alt.Y("count():Q", title="Number of Customers")
+).properties(
+    width=600,
+    height=400
+)
+st.altair_chart(churn_hist, use_container_width=True)
 
 st.subheader("Top high-risk customers")
-st.dataframe(
-    scored_sorted[["customer_id", "churn_score", "recency_days", "orders_90d", "revenue_90d", "top_shap_features"]]
-    .head(20)
+# Format top_shap_features for display
+display_df = scored_sorted[["customer_id", "churn_score", "recency_days", "orders_90d", "revenue_90d", "top_shap_features"]].copy()
+display_df["top_shap_features"] = display_df["top_shap_features"].apply(
+    lambda feats: ", ".join([f"{f['feature']}: {f['shap_value']:.3f}" for f in feats[:3]])
 )
+st.dataframe(display_df.head(20))
 
 st.markdown("---")
 
@@ -75,8 +91,16 @@ ints_b["ts"] = pd.to_datetime(ints_b["ts"])
 ints_curr = ints_b[(ints_b["ts"] >= period_start) & (ints_b["ts"] <= ref_date)]
 
 if not ints_curr.empty:
-    reason_counts = ints_curr["reason_label"].value_counts()
-    st.bar_chart(reason_counts)
+    reason_counts = ints_curr["reason_label"].value_counts().reset_index()
+    reason_counts.columns = ["Complaint Reason", "Count"]
+    reason_chart = alt.Chart(reason_counts).mark_bar().encode(
+        x=alt.X("Complaint Reason:N", title="Complaint Reason", sort="-y"),
+        y=alt.Y("Count:Q", title="Number of Complaints")
+    ).properties(
+        width=600,
+        height=400
+    )
+    st.altair_chart(reason_chart, use_container_width=True)
     st.write("Sample complaints:")
     st.dataframe(ints_curr[["ts", "customer_id", "channel", "reason_label", "raw_text"]].head(20))
 else:
@@ -93,9 +117,56 @@ for feats in scored["top_shap_features"]:
 
 imp_df = pd.DataFrame(
     [{"feature": k, "importance": v} for k, v in global_imp.items()]
-).sort_values("importance", ascending=False).head(15)
+)
 
-st.bar_chart(imp_df.set_index("feature"))
+# Filter out features with zero importance
+imp_df = imp_df[imp_df["importance"] > 0]
+
+# Sort by importance in descending order and take top 15
+imp_df = imp_df.sort_values("importance", ascending=False).head(15)
+
+# Format feature names for better readability
+imp_df["feature_formatted"] = imp_df["feature"].str.replace("_", " ").str.title()
+
+shap_chart = alt.Chart(imp_df).mark_bar().encode(
+    x=alt.X("importance:Q", title="SHAP Importance Score"),
+    y=alt.Y("feature_formatted:N", title="Feature", sort=alt.EncodingSortField(field="importance", order="descending"))
+).properties(
+    width=600,
+    height=400
+)
+st.altair_chart(shap_chart, use_container_width=True)
+
+st.markdown("---")
+
+# Additional Metrics Section
+st.subheader("Customer Risk Analysis")
+
+# Customer risk distribution
+risk_distribution = pd.DataFrame({
+    "Risk Level": ["High Risk", "Medium Risk", "Low Risk"],
+    "Count": [
+        int((scored["churn_score"] > 0.7).sum()),
+        int(((scored["churn_score"] > 0.4) & (scored["churn_score"] <= 0.7)).sum()),
+        int((scored["churn_score"] <= 0.4).sum())
+    ]
+})
+
+risk_chart = alt.Chart(risk_distribution).mark_bar().encode(
+    x=alt.X("Risk Level:N", title="Risk Level", sort=["High Risk", "Medium Risk", "Low Risk"]),
+    y=alt.Y("Count:Q", title="Number of Customers")
+).properties(
+    width=400,
+    height=300
+)
+st.altair_chart(risk_chart, use_container_width=True)
+
+# Additional metrics in columns
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Avg Order Value", f"${curr_orders['revenue'].mean():.2f}" if not curr_orders.empty else "$0.00")
+col2.metric("Avg Recency", f"{scored['recency_days'].mean():.0f} days")
+col3.metric("Avg Orders (90d)", f"{scored['orders_90d'].mean():.1f}")
+col4.metric("Avg Revenue (90d)", f"${scored['revenue_90d'].mean():.2f}")
 
 st.markdown("---")
 
@@ -108,17 +179,142 @@ with st.spinner("Generating insights..."):
 # Display insights
 st.markdown(f"### {insights.get('headline', 'Churn Analysis Summary')}")
 
+# Executive Summary
+if insights.get('executive_summary'):
+    st.markdown("#### 📊 Executive Summary")
+    st.info(insights.get('executive_summary'))
+
+# Key Metrics and Trends
+col1, col2 = st.columns(2)
+
+with col1:
+    if insights.get('key_metrics'):
+        st.markdown("#### 📈 Key Metrics")
+        metrics = insights.get('key_metrics', {})
+        for key, value in metrics.items():
+            st.metric(key.replace("_", " ").title(), value)
+
+with col2:
+    if insights.get('trends'):
+        st.markdown("#### 📉 Trends (vs Previous Period)")
+        trends = insights.get('trends', {})
+        for key, value in trends.items():
+            # Determine if trend is positive or negative
+            change_val = float(value.replace("%", "").replace("+", ""))
+            delta_color = "normal"
+            if "revenue" in key or "orders" in key or "customers" in key:
+                delta_color = "inverse" if change_val < 0 else "normal"
+            st.metric(key.replace("_", " ").title(), value, delta_color=delta_color)
+
+st.markdown("---")
+
+# Detailed Analysis
+if insights.get('detailed_analysis'):
+    st.markdown("#### 🔍 Detailed Analysis")
+    st.markdown(insights.get('detailed_analysis'))
+
+st.markdown("---")
+
+# Top Churn Drivers
 if insights.get('top_reasons'):
-    st.markdown("#### Top Churn Drivers")
+    st.markdown("#### 🎯 Top Churn Drivers")
     for i, reason in enumerate(insights.get('top_reasons', [])[:5], 1):
         with st.expander(f"{i}. {reason['name']} (Impact: {reason['impact_estimate']})"):
             for evidence in reason.get('evidence', []):
                 st.write(f"• {evidence}")
 
+st.markdown("---")
+
+# Recommendations
 if insights.get('recommendations'):
-    st.markdown("#### Recommendations")
-    for i, rec in enumerate(insights.get('recommendations', [])[:5], 1):
-        st.write(f"{i}. {rec}")
+    st.markdown("#### 💡 Recommendations")
+    for i, rec in enumerate(insights.get('recommendations', []), 1):
+        st.write(f"**{i}.** {rec}")
+
+st.markdown("---")
+
+# Chatbot Section
+st.subheader("💬 Ask Questions About This Business")
+
+# Initialize chat history in session state
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "last_business_id" not in st.session_state:
+    st.session_state.last_business_id = None
+
+# Get business name
+business_name = businesses[businesses["business_id"] == business_id].iloc[0]["name"]
+
+# Clear chat history if business changed
+if st.session_state.last_business_id != business_id:
+    st.session_state.chat_history = []
+    st.session_state.last_business_id = business_id
+
+# Display chat history
+chat_container = st.container()
+with chat_container:
+    for i, (role, message) in enumerate(st.session_state.chat_history):
+        if role == "user":
+            with st.chat_message("user"):
+                st.write(message)
+        else:
+            with st.chat_message("assistant"):
+                st.write(message)
+
+# Chat input
+user_question = st.chat_input(f"Ask a question about {business_name}...")
+
+if user_question:
+    # Add user message to history
+    st.session_state.chat_history.append(("user", user_question))
+    
+    # Generate answer
+    with st.spinner("Analyzing business data..."):
+        try:
+            answer = answer_question(
+                question=user_question,
+                business_name=business_name,
+                bundle=bundle,
+                insights=insights
+            )
+            st.session_state.chat_history.append(("assistant", answer))
+        except Exception as e:
+            error_msg = f"Sorry, I encountered an error: {str(e)}"
+            st.session_state.chat_history.append(("assistant", error_msg))
+    
+    # Rerun to update chat display
+    st.rerun()
+
+# Clear chat button
+if st.button("🗑️ Clear Chat History"):
+    st.session_state.chat_history = []
+    st.rerun()
+
+# Suggested questions
+st.markdown("**💡 Suggested Questions:**")
+suggested_questions = [
+    "What is the current churn rate?",
+    "How is revenue performing?",
+    "How many customers are at risk?",
+    "What are the top complaints?",
+    "What recommendations do you have?",
+    "What is the average order value?",
+    "How many active customers do we have?"
+]
+
+cols = st.columns(3)
+for i, q in enumerate(suggested_questions):
+    with cols[i % 3]:
+        if st.button(q, key=f"suggest_{i}", use_container_width=True):
+            # Add question to chat
+            st.session_state.chat_history.append(("user", q))
+            with st.spinner("Analyzing..."):
+                try:
+                    answer = answer_question(q, business_name, bundle, insights)
+                    st.session_state.chat_history.append(("assistant", answer))
+                except Exception as e:
+                    st.session_state.chat_history.append(("assistant", f"Error: {str(e)}"))
+            st.rerun()
 
 st.markdown("---")
 

@@ -125,6 +125,9 @@ def generate_insights(evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
     Expected output format:
     {
       "headline": "...",
+      "executive_summary": "...",
+      "key_metrics": {...},
+      "trends": {...},
       "top_reasons": [
         {
           "name": "...",
@@ -133,17 +136,32 @@ def generate_insights(evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
         },
         ...
       ],
-      "recommendations": ["...", "..."]
+      "recommendations": ["...", "..."],
+      "detailed_analysis": "..."
     }
     """
     # Extract data from evidence bundle
     metrics = evidence_bundle.get("metrics", {})
     shap_features = evidence_bundle.get("shap_importances", {})
     complaint_stats = evidence_bundle.get("complaint_reasons", {})
+    customer_segments = evidence_bundle.get("customer_segments", {})
     
     churn_rate = metrics.get("churn_rate", 0)
     revenue = metrics.get("revenue", 0)
     active_customers = metrics.get("active_customers", 0)
+    orders_count = metrics.get("orders_count", 0)
+    avg_order_value = metrics.get("avg_order_value", 0)
+    revenue_change = metrics.get("revenue_change_pct", 0)
+    orders_change = metrics.get("orders_change_pct", 0)
+    customers_change = metrics.get("customers_change_pct", 0)
+    high_risk_customers = metrics.get("high_risk_customers", 0)
+    medium_risk_customers = metrics.get("medium_risk_customers", 0)
+    low_risk_customers = metrics.get("low_risk_customers", 0)
+    revenue_at_risk_pct = metrics.get("revenue_at_risk_pct", 0)
+    avg_recency = metrics.get("avg_recency_days", 0)
+    avg_orders_90d = metrics.get("avg_orders_90d", 0)
+    avg_revenue_90d = metrics.get("avg_revenue_90d", 0)
+    avg_tenure = metrics.get("avg_tenure_days", 0)
     
     # Generate headline
     if churn_rate > 0.3:
@@ -152,6 +170,22 @@ def generate_insights(evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
         headline = f"Moderate churn rate ({churn_rate:.1%}) - Monitor closely"
     else:
         headline = f"Low churn rate ({churn_rate:.1%}) - Business is stable"
+    
+    # Generate executive summary
+    summary_parts = []
+    summary_parts.append(f"Current churn rate is {churn_rate:.1%} with {active_customers} active customers.")
+    
+    if revenue_change > 5:
+        summary_parts.append(f"Revenue increased by {revenue_change:.1f}% compared to previous period - positive trend.")
+    elif revenue_change < -5:
+        summary_parts.append(f"Revenue decreased by {abs(revenue_change):.1f}% compared to previous period - concerning trend.")
+    else:
+        summary_parts.append(f"Revenue is relatively stable ({revenue_change:+.1f}% change).")
+    
+    if high_risk_customers > 0:
+        summary_parts.append(f"{high_risk_customers} customers are at high risk of churning, representing {revenue_at_risk_pct:.1f}% of recent revenue.")
+    
+    executive_summary = " ".join(summary_parts)
     
     # Identify top reasons from SHAP features and complaints
     top_reasons = []
@@ -188,29 +222,78 @@ def generate_insights(evidence_bundle: Dict[str, Any]) -> Dict[str, Any]:
     recommendations = []
     
     if churn_rate > 0.2:
-        recommendations.append("Implement customer retention program with targeted offers")
+        recommendations.append("Implement customer retention program with targeted offers and personalized outreach")
+    
+    if high_risk_customers > active_customers * 0.1:
+        recommendations.append(f"Prioritize outreach to {high_risk_customers} high-risk customers with win-back campaigns")
+    
+    if avg_recency > 60:
+        recommendations.append(f"Average customer recency is {avg_recency:.0f} days - implement re-engagement campaigns")
     
     if complaint_stats.get("SHIPPING_DELAY", 0) > 5:
-        recommendations.append("Review and optimize shipping and delivery processes")
+        recommendations.append("Review and optimize shipping and delivery processes - shipping delays are a major concern")
     
     if complaint_stats.get("CUSTOMER_SERVICE", 0) > 5:
-        recommendations.append("Improve customer service response time and quality")
+        recommendations.append("Improve customer service response time and quality - invest in training and support tools")
     
     if complaint_stats.get("PRICE_SENSITIVITY", 0) > 5:
-        recommendations.append("Consider pricing strategy review and competitive analysis")
+        recommendations.append("Consider pricing strategy review and competitive analysis - price sensitivity is high")
+    
+    if revenue_change < -10:
+        recommendations.append("Revenue decline detected - investigate root causes and implement revenue recovery initiatives")
+    
+    if avg_orders_90d < 1:
+        recommendations.append("Low order frequency detected - implement programs to increase purchase frequency")
     
     if shap_features:
         top_feature = max(shap_features.items(), key=lambda x: abs(x[1]))
-        recommendations.append(f"Focus on improving {top_feature[0].replace('_', ' ')} as it's the strongest churn driver")
+        feature_name = top_feature[0].replace("_", " ").title()
+        recommendations.append(f"Focus on improving {feature_name} as it's the strongest churn driver (importance: {abs(top_feature[1]):.3f})")
     
     if not recommendations:
         recommendations.append("Continue monitoring key metrics and customer feedback")
         recommendations.append("Maintain current customer engagement strategies")
     
+    # Generate detailed analysis
+    analysis_parts = []
+    analysis_parts.append(f"**Customer Risk Distribution:** {high_risk_customers} high-risk, {medium_risk_customers} medium-risk, and {low_risk_customers} low-risk customers.")
+    analysis_parts.append(f"**Customer Behavior:** Average customer has {avg_orders_90d:.1f} orders in the last 90 days, with average revenue of ${avg_revenue_90d:.2f}.")
+    analysis_parts.append(f"**Customer Engagement:** Average recency is {avg_recency:.0f} days, and average customer tenure is {avg_tenure:.0f} days.")
+    
+    if revenue_at_risk_pct > 20:
+        analysis_parts.append(f"**Revenue Risk:** {revenue_at_risk_pct:.1f}% of recent revenue is at risk from high-risk customers - significant financial impact.")
+    
+    if customer_segments:
+        segment_str = ", ".join([f"{k}: {v}" for k, v in customer_segments.items()])
+        analysis_parts.append(f"**Customer Segments:** {segment_str}")
+    
+    detailed_analysis = "\n\n".join(analysis_parts)
+    
+    # Key metrics summary
+    key_metrics = {
+        "churn_rate": f"{churn_rate:.1%}",
+        "revenue": f"${revenue:,.0f}",
+        "avg_order_value": f"${avg_order_value:.2f}",
+        "active_customers": f"{active_customers:,}",
+        "high_risk_customers": f"{high_risk_customers}",
+        "revenue_at_risk": f"{revenue_at_risk_pct:.1f}%"
+    }
+    
+    # Trends
+    trends = {
+        "revenue_change": f"{revenue_change:+.1f}%",
+        "orders_change": f"{orders_change:+.1f}%",
+        "customers_change": f"{customers_change:+.1f}%"
+    }
+    
     return {
         "headline": headline,
+        "executive_summary": executive_summary,
+        "key_metrics": key_metrics,
+        "trends": trends,
         "top_reasons": top_reasons,
-        "recommendations": recommendations
+        "recommendations": recommendations,
+        "detailed_analysis": detailed_analysis
     }
 
 
@@ -221,19 +304,36 @@ def generate_email(owner_name: str, business_name: str, period_str: str, insight
     body = f"""
 Dear {owner_name},
 
-Here is your weekly churn analysis report for {business_name} covering the period: {period_str}
+Here is your Monthly churn analysis report for {business_name} covering the period: {period_str}
 
 {insights.get('headline', 'Churn Analysis Summary')}
 
-Top Churn Drivers:
+EXECUTIVE SUMMARY:
+{insights.get('executive_summary', 'No summary available')}
+
+KEY METRICS:
 """
+    if insights.get('key_metrics'):
+        for key, value in insights.get('key_metrics', {}).items():
+            body += f"  • {key.replace('_', ' ').title()}: {value}\n"
+    
+    body += "\nTRENDS (vs Previous Period):\n"
+    if insights.get('trends'):
+        for key, value in insights.get('trends', {}).items():
+            body += f"  • {key.replace('_', ' ').title()}: {value}\n"
+    
+    body += "\nDETAILED ANALYSIS:\n"
+    if insights.get('detailed_analysis'):
+        body += insights.get('detailed_analysis') + "\n"
+    
+    body += "\nTOP CHURN DRIVERS:\n"
     for i, reason in enumerate(insights.get('top_reasons', [])[:5], 1):
         body += f"\n{i}. {reason['name']} (Impact: {reason['impact_estimate']})\n"
         for evidence in reason.get('evidence', []):
             body += f"   - {evidence}\n"
     
-    body += "\nRecommendations:\n"
-    for i, rec in enumerate(insights.get('recommendations', [])[:5], 1):
+    body += "\nRECOMMENDATIONS:\n"
+    for i, rec in enumerate(insights.get('recommendations', []), 1):
         body += f"{i}. {rec}\n"
     
     body += "\nBest regards,\nChurn Doctor Analytics Team"
