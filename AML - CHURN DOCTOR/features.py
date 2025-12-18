@@ -27,73 +27,43 @@ def build_features_for_business(business_id: str, ref_date: datetime = None) -> 
     ints = interactions[interactions["business_id"] == business_id].copy()
 
     if ref_date is None:
-        ref_date = get_reference_date(ords)
+        ref_date = get_reference_date(ords) - timedelta(days=int(churn_window_days))
 
-    # basic aggregates
-    ords = ords.sort_values("order_ts")
-    last_order = ords.groupby("customer_id")["order_ts"].max().rename("last_order_ts")
-    first_order = ords.groupby("customer_id")["order_ts"].min().rename("first_order_ts")
-    order_count = ords.groupby("customer_id")["order_id"].nunique().rename("order_count")
-    revenue_sum = ords.groupby("customer_id")["revenue"].sum().rename("revenue_sum")
-    revenue_90d = ords[ords["order_ts"] >= ref_date - timedelta(days=90)] \
-        .groupby("customer_id")["revenue"].sum().rename("revenue_90d")
-    orders_90d = ords[ords["order_ts"] >= ref_date - timedelta(days=90)] \
-        .groupby("customer_id")["order_id"].nunique().rename("orders_90d")
+    ords_past = ords[ords["order_ts"] < ref_date].copy()
+    ints_past = ints[ints["ts"] < ref_date].copy()
+    ords_future = ords[ords["order_ts"] >= ref_date]
 
-    avg_discount_pct = (ords.groupby("customer_id")[["discount_amount", "revenue"]]
-                        .apply(lambda g: (g["discount_amount"].sum() / g["revenue"].sum()) * 100
-                               if g["revenue"].sum() > 0 else 0.0)
-                        .rename("avg_discount_pct"))
+    last_order = ords_past.groupby("customer_id")["order_ts"].max().rename("last_order_ts")
+    order_count = ords_past.groupby("customer_id")["order_id"].nunique().rename("order_count")
+    revenue_sum = ords_past.groupby("customer_id")["revenue"].sum().rename("revenue_sum")
+    
+    ninety_days_ago = ref_date - timedelta(days=90)
+    revenue_90d = ords_past[ords_past["order_ts"] >= ninety_days_ago].groupby("customer_id")["revenue"].sum().rename("revenue_90d")
+    orders_90d = ords_past[ords_past["order_ts"] >= ninety_days_ago].groupby("customer_id")["order_id"].nunique().rename("orders_90d")
+    num_complaints_90d = ints_past[ints_past["ts"] >= ninety_days_ago].groupby("customer_id")["interaction_id"].nunique().rename("num_complaints_90d")
 
-    avg_delay = ords.groupby("customer_id")["delivery_delay_days"].mean().rename("avg_delivery_delay")
-
-    # category shares
-    category_share = (ords
-        .groupby(["customer_id", "product_category"])["order_id"]
-        .count()
-        .unstack(fill_value=0))
-    category_share = category_share.div(category_share.sum(axis=1), axis=0).add_prefix("cat_share_")
-
-    # interactions
-    ints_last_90 = ints[ints["ts"] >= ref_date - timedelta(days=90)]
-    num_complaints_90d = ints_last_90.groupby("customer_id")["interaction_id"] \
-        .nunique().rename("num_complaints_90d")
-
-    reason_counts = (ints_last_90
-                     .groupby(["customer_id", "reason_label"])["interaction_id"]
-                     .count()
-                     .unstack(fill_value=0)
-                     .add_prefix("complaints_"))
-
-    # merge all
     df = cust.set_index("customer_id")
     df["tenure_days"] = (ref_date - df["signup_date"]).dt.days
-
-    df = df.join([last_order, first_order, order_count, revenue_sum,
-                  revenue_90d, orders_90d, avg_discount_pct, avg_delay,
-                  category_share, num_complaints_90d, reason_counts])
+    
+    df = df.join([last_order, order_count, revenue_sum, revenue_90d, orders_90d, num_complaints_90d])
 
     df["recency_days"] = (ref_date - df["last_order_ts"]).dt.days
-    df["recency_days"] = df["recency_days"].fillna(df["tenure_days"])  # no orders yet
+    df["recency_days"] = df["recency_days"].fillna(df["tenure_days"])
 
-    df["orders_90d"] = df["orders_90d"].fillna(0)
-    df["revenue_90d"] = df["revenue_90d"].fillna(0)
-    df["num_complaints_90d"] = df["num_complaints_90d"].fillna(0)
-    df["avg_discount_pct"] = df["avg_discount_pct"].fillna(0)
-    df["avg_delivery_delay"] = df["avg_delivery_delay"].fillna(0)
+    cols_to_fill = ["order_count", "revenue_sum", "revenue_90d", "orders_90d", "num_complaints_90d"]
+    df[cols_to_fill] = df[cols_to_fill].fillna(0)
 
-    # churn label
-    df["is_churned"] = (df["last_order_ts"].isna()) | \
-                       ((ref_date - df["last_order_ts"]).dt.days > churn_window_days)
+    future_customers = ords_future["customer_id"].unique()
+    df["is_churned"] = (~df.index.isin(future_customers)).astype(int)
+    
+    df = df[df["tenure_days"] >= 0]
 
-    # simple encoding for segment
-    df["segment_value"] = df["segment"].map({"value": 0, "standard": 1, "premium": 2})
-
-    feature_cols = [c for c in df.columns if c not in
-                    ["signup_date", "last_order_ts", "first_order_ts",
-                     "segment", "city", "acquisition_channel"]]
-
-    df_features = df[feature_cols].reset_index()
+    feature_cols = [
+        "tenure_days", "recency_days", "order_count", 
+        "revenue_sum", "revenue_90d", "orders_90d", "num_complaints_90d"
+    ]
+    
+    df_features = df[feature_cols + ["is_churned"]].reset_index()
     df_features["business_id"] = business_id
 
     return df_features, ref_date

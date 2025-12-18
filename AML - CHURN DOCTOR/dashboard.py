@@ -31,9 +31,10 @@ lookback_days = st.sidebar.slider("Lookback window (days)", min_value=14, max_va
 
 # ref date = last order date for that business
 orders_b = orders[orders["business_id"] == business_id]
-ref_date = orders_b["order_ts"].max()
+max_date = orders_b["order_ts"].max()
+ref_date = max_date - timedelta(days=lookback_days)
 
-st.title("Churn Doctor – Analytics")
+st.title("Churn Doctor - Analytics")
 
 # Features & scoring
 df_feat, _ = build_features_for_business(business_id, ref_date)
